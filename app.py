@@ -9,7 +9,7 @@ import os
 DATA_FILE = "inventory.csv"
 
 st.set_page_config(
-    page_title="FreshMate – Smart Fridge Tracker",
+    page_title="FreshMate – Smart Groceries Tracker",
     layout="centered"
 )
 
@@ -30,9 +30,20 @@ def send_email(sender, app_password, receiver, subject, body):
 # ---------------- DATA FUNCTIONS ----------------
 def load_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE)
+        df = pd.read_csv(DATA_FILE)
+
+        # Auto add missing columns
+        for col in ["PreAlertSent", "AlertSent"]:
+            if col not in df.columns:
+                df[col] = False
+
+        return df
+
     return pd.DataFrame(
-        columns=["Username", "Item", "Quantity", "Unit", "Expiry", "AlertSent"]
+        columns=[
+            "Username", "Item", "Quantity",
+            "Unit", "Expiry", "PreAlertSent", "AlertSent"
+        ]
     )
 
 def save_data(df):
@@ -43,45 +54,39 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 # ==================================================
-# 🔐 LOGIN PAGE (MATCHES YOUR SCREENSHOT)
+# 🔐 LOGIN PAGE
 # ==================================================
 if not st.session_state.logged_in:
     st.markdown("## 🥗 FreshMate – Smart Fridge Tracker")
     st.markdown("### 🔐 Login")
 
-    with st.container():
-        username = st.text_input("👤 Username")
-        email = st.text_input("📧 Email Address")
-        app_password = st.text_input(
-            "🔑 Gmail App Password",
-            type="password"
-        )
+    username = st.text_input("👤 Username")
+    email = st.text_input("📧 Email Address")
+    app_password = st.text_input("🔑 Gmail App Password", type="password")
 
-        st.markdown("")  # spacing
+    if st.button("Login", use_container_width=True):
+        if not username or not email or not app_password:
+            st.warning("Please fill all fields")
+        else:
+            try:
+                send_email(
+                    email,
+                    app_password,
+                    email,
+                    "FreshMate Login Successful",
+                    f"Hello {username},\n\nYou have logged into FreshMate successfully."
+                )
 
-        if st.button("Login", use_container_width=True):
-            if not username or not email or not app_password:
-                st.warning("Please fill all fields")
-            else:
-                try:
-                    send_email(
-                        email,
-                        app_password,
-                        email,
-                        "FreshMate Login Successful",
-                        f"Hello {username},\n\nYou have logged into FreshMate successfully."
-                    )
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.session_state.email = email
+                st.session_state.password = app_password
 
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.session_state.email = email
-                    st.session_state.password = app_password
+                st.success("Login successful 📩")
+                st.rerun()
 
-                    st.success("Login successful 📩")
-                    st.rerun()
-
-                except:
-                    st.error("❌ Invalid Gmail App Password")
+            except:
+                st.error("❌ Invalid Gmail App Password")
 
     st.stop()
 
@@ -98,7 +103,7 @@ st.subheader("➕ Add Item")
 
 item = st.text_input("Item Name")
 quantity = st.number_input("Quantity", min_value=1, step=1)
-unit = st.selectbox("Unit", ["kg", "g", "litre", "ml", "packs", "pieces"])
+unit = st.selectbox("Unit", ["kg", "g", "litre", "ml", "pack", "pieces"])
 expiry = st.date_input("Expiry Date")
 
 if st.button("Add Item"):
@@ -109,6 +114,7 @@ if st.button("Add Item"):
             "Quantity": quantity,
             "Unit": unit,
             "Expiry": expiry,
+            "PreAlertSent": False,
             "AlertSent": False
         }
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -117,24 +123,51 @@ if st.button("Add Item"):
     else:
         st.warning("Item name is required")
 
-# ---------------- EXPIRY ALERT (ONLY ONCE) ----------------
+# ---------------- ALERT LOGIC ----------------
 today = date.today()
 user_df = df[df["Username"] == st.session_state.username]
 
 for idx, row in user_df.iterrows():
-    if pd.to_datetime(row["Expiry"]).date() <= today and not row["AlertSent"]:
+    expiry_date = pd.to_datetime(row["Expiry"]).date()
+    days_left = (expiry_date - today).days
+
+    # ⚠️ 5 DAYS BEFORE ALERT
+    if 0 < days_left <= 3 and not row["PreAlertSent"]:
         try:
             send_email(
                 st.session_state.email,
                 st.session_state.password,
                 st.session_state.email,
-                "⚠️ FreshMate Expiry Alert",
+                "⏳ FreshMate – Expiry Approaching",
+                f"""
+Hello {st.session_state.username},
+
+Your item "{row['Item']}" will expire in {days_left} day(s).
+Expiry Date: {row['Expiry']}
+
+Please plan to use it soon.
+
+– FreshMate
+"""
+            )
+            df.loc[idx, "PreAlertSent"] = True
+        except:
+            pass
+
+    # ❌ EXPIRED ALERT
+    if expiry_date <= today and not row["AlertSent"]:
+        try:
+            send_email(
+                st.session_state.email,
+                st.session_state.password,
+                st.session_state.email,
+                "⚠️ FreshMate – Item Expired",
                 f"""
 Hello {st.session_state.username},
 
 Your item "{row['Item']}" has expired on {row['Expiry']}.
 
-Please use or discard it.
+Please discard it if unused.
 
 – FreshMate
 """
