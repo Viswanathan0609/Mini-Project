@@ -5,26 +5,23 @@ import smtplib
 from email.message import EmailMessage
 import os
 
-# ================= CREATOR CONFIG =================
-SENDER_EMAIL = "yourgmail@gmail.com"          # CREATOR EMAIL
-APP_PASSWORD = "YOUR_16_CHAR_APP_PASSWORD"    # CREATOR APP PASSWORD
 DATA_FILE = "inventory.csv"
 
 # ================= EMAIL FUNCTION =================
-def send_email(receiver, subject, body):
+def send_email(sender, password, receiver, subject, body):
     msg = EmailMessage()
     msg.set_content(body)
     msg["Subject"] = subject
-    msg["From"] = SENDER_EMAIL
+    msg["From"] = sender
     msg["To"] = receiver
 
     server = smtplib.SMTP("smtp.gmail.com", 587)
     server.starttls()
-    server.login(SENDER_EMAIL, APP_PASSWORD)
+    server.login(sender, password)
     server.send_message(msg)
     server.quit()
 
-# ================= DATA HANDLING =================
+# ================= DATA FUNCTIONS =================
 def load_data():
     if os.path.exists(DATA_FILE):
         return pd.read_csv(DATA_FILE)
@@ -33,7 +30,7 @@ def load_data():
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# ================= SESSION =================
+# ================= SESSION INIT =================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
@@ -42,34 +39,42 @@ st.title("🥗 FreshMate")
 
 # ================= LOGIN PAGE =================
 if not st.session_state.logged_in:
-    st.subheader("📧 Email Login")
+    st.subheader("🔐 Login")
 
-    email = st.text_input("Enter your email")
+    email = st.text_input("📧 Email Address")
+    app_password = st.text_input("🔑 Gmail App Password", type="password")
 
     if st.button("Login"):
-        if email:
-            st.session_state.logged_in = True
-            st.session_state.user_email = email
+        if email and app_password:
+            try:
+                send_email(
+                    email,
+                    app_password,
+                    email,
+                    "FreshMate Login Successful",
+                    "You have successfully logged in to FreshMate."
+                )
 
-            send_email(
-                email,
-                "FreshMate Login Successful",
-                "You have successfully logged in to FreshMate."
-            )
+                st.session_state.logged_in = True
+                st.session_state.email = email
+                st.session_state.password = app_password
 
-            st.success("Login successful! Email sent 📬")
+                st.success("Login successful! Email sent 📩")
+
+            except:
+                st.error("Login failed ❌ Check email or app password")
         else:
-            st.warning("Please enter a valid email")
+            st.warning("Please fill all fields")
 
     st.stop()
 
 # ================= MAIN APP =================
-st.success(f"Welcome {st.session_state.user_email}")
+st.success(f"Welcome {st.session_state.email}")
 
 df = load_data()
 
 # ================= ADD ITEM =================
-st.subheader("➕ Add Item")
+st.subheader("➕ Add Grocery Item")
 
 item = st.text_input("Item Name")
 quantity = st.text_input("Quantity (e.g., 1 kg, 2 packets)")
@@ -81,27 +86,29 @@ if st.button("Add Item"):
         save_data(df)
         st.success("Item added successfully")
     else:
-        st.warning("Fill all fields")
+        st.warning("Please fill all fields")
 
-# ================= EXPIRY NOTIFICATION =================
+# ================= EXPIRY ALERT =================
 today = date.today()
 
 for _, row in df.iterrows():
     exp = datetime.strptime(str(row["Expiry"]), "%Y-%m-%d").date()
     if exp <= today:
-        send_email(
-            st.session_state.user_email,
-            "FreshMate Expiry Alert",
-            f"⚠️ {row['Item']} expired on {row['Expiry']}.\nPlease use or discard it."
-        )
+        try:
+            send_email(
+                st.session_state.email,
+                st.session_state.password,
+                st.session_state.email,
+                "⚠️ FreshMate Expiry Alert",
+                f"{row['Item']} expired on {row['Expiry']}. Please use or discard it."
+            )
+        except:
+            pass
 
 # ================= REMOVE ITEM =================
 st.subheader("🗑 Remove Item")
 
-remove_item = st.selectbox(
-    "Select item",
-    [""] + df["Item"].tolist()
-)
+remove_item = st.selectbox("Select item to remove", [""] + df["Item"].tolist())
 
 if st.button("Remove"):
     if remove_item:
@@ -109,6 +116,6 @@ if st.button("Remove"):
         save_data(df)
         st.success("Item removed")
 
-# ================= DISPLAY =================
+# ================= DISPLAY ITEMS =================
 st.subheader("📋 Stored Items")
 st.dataframe(df, use_container_width=True)
