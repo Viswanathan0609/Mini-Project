@@ -1,50 +1,54 @@
 import streamlit as st
 import pandas as pd
-from datetime import date
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
+from datetime import datetime, date
+import smtplib
+from email.message import EmailMessage
+import os
 
 # ---------------- CONFIG ----------------
-SENDGRID_API_KEY = "PASTE_YOUR_API_KEY_HERE"
-FROM_EMAIL = "verified_sender@yourdomain.com"
+SENDER_EMAIL = "yourgmail@gmail.com"       # creator email
+APP_PASSWORD = "your_16_char_app_password" # app password
+DATA_FILE = "inventory.csv"
 
 # ---------------- EMAIL FUNCTION ----------------
-def send_email(to_email, subject, content):
-    try:
-        message = Mail(
-            from_email=FROM_EMAIL,
-            to_emails=to_email,
-            subject=subject,
-            plain_text_content=content
-        )
-        sg = SendGridAPIClient(SENDGRID_API_KEY)
-        sg.send(message)
-    except Exception as e:
-        st.error("Email failed")
+def send_email(to_email, subject, body):
+    msg = EmailMessage()
+    msg.set_content(body)
+    msg["Subject"] = subject
+    msg["From"] = SENDER_EMAIL
+    msg["To"] = to_email
 
-# ---------------- SESSION INIT ----------------
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(SENDER_EMAIL, APP_PASSWORD)
+    server.send_message(msg)
+    server.quit()
+
+# ---------------- DATA FUNCTIONS ----------------
+def load_data():
+    if os.path.exists(DATA_FILE):
+        return pd.read_csv(DATA_FILE)
+    return pd.DataFrame(columns=["Item", "Quantity", "Expiry"])
+
+def save_data(df):
+    df.to_csv(DATA_FILE, index=False)
+
+# ---------------- SESSION ----------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
-if "email" not in st.session_state:
-    st.session_state.email = ""
-
-if "items" not in st.session_state:
-    st.session_state.items = pd.DataFrame(
-        columns=["Item", "Quantity", "Unit", "Expiry Date"]
-    )
+st.title("🥗 FreshMate")
 
 # ---------------- LOGIN PAGE ----------------
 if not st.session_state.logged_in:
-    st.title("🔐 FreshMate Login")
+    st.subheader("🔐 Login")
 
-    email = st.text_input("Email")
-    password = st.text_input("Password", type="password")
+    email = st.text_input("Enter your email")
 
     if st.button("Login"):
-        if email and password:
+        if email:
             st.session_state.logged_in = True
-            st.session_state.email = email
+            st.session_state.user_email = email
 
             send_email(
                 email,
@@ -54,72 +58,49 @@ if not st.session_state.logged_in:
 
             st.success("Login successful! Email sent 📧")
         else:
-            st.warning("Please enter email and password")
+            st.warning("Please enter email")
+
+    st.stop()
 
 # ---------------- MAIN APP ----------------
-else:
-    st.title("🥗 FreshMate – Fridge Manager")
-    st.write(f"**Logged in as:** {st.session_state.email}")
+st.success(f"Welcome {st.session_state.user_email}")
 
-    st.subheader("➕ Add Item")
-    item = st.text_input("Item name")
-    qty = st.number_input("Quantity", min_value=1)
-    unit = st.selectbox("Unit", ["kg", "litres", "pieces"])
-    expiry = st.date_input("Expiry Date")
+df = load_data()
 
-    if st.button("Add Item"):
-        new_row = {
-            "Item": item,
-            "Quantity": qty,
-            "Unit": unit,
-            "Expiry Date": expiry
-        }
-        st.session_state.items = pd.concat(
-            [st.session_state.items, pd.DataFrame([new_row])],
-            ignore_index=True
-        )
-        st.success("Item added")
+# ---------------- ADD ITEM ----------------
+st.subheader("➕ Add Item")
 
-    # ---------------- DISPLAY ITEMS ----------------
-    st.subheader("📋 Inventory")
-    if not st.session_state.items.empty:
-        st.dataframe(st.session_state.items)
+item = st.text_input("Item Name")
+quantity = st.text_input("Quantity (eg: 1 kg, 2 litre)")
+expiry = st.date_input("Expiry Date")
 
-        # ---------------- REMOVE ITEM ----------------
-        remove_item = st.selectbox(
-            "Remove item",
-            st.session_state.items["Item"]
+if st.button("Add Item"):
+    df.loc[len(df)] = [item, quantity, expiry]
+    save_data(df)
+    st.success("Item added")
+
+# ---------------- EXPIRY CHECK ----------------
+today = date.today()
+
+for _, row in df.iterrows():
+    exp_date = datetime.strptime(str(row["Expiry"]), "%Y-%m-%d").date()
+    if exp_date <= today:
+        send_email(
+            st.session_state.user_email,
+            "FreshMate Expiry Alert",
+            f"{row['Item']} has expired on {row['Expiry']}"
         )
 
-        if st.button("Remove Selected Item"):
-            st.session_state.items = st.session_state.items[
-                st.session_state.items["Item"] != remove_item
-            ]
-            st.success("Item removed")
+# ---------------- REMOVE ITEM ----------------
+st.subheader("🗑 Remove Used Items")
 
-        # ---------------- EXPIRY CHECK ----------------
-        today = date.today()
-        expired_items = st.session_state.items[
-            st.session_state.items["Expiry Date"] < today
-        ]
+remove_item = st.selectbox("Select item to remove", [""] + df["Item"].tolist())
 
-        if not expired_items.empty:
-            for _, row in expired_items.iterrows():
-                send_email(
-                    st.session_state.email,
-                    "⚠ FreshMate Expiry Alert",
-                    f"{row['Item']} has expired. Please use or discard it."
-                )
-            st.warning("Expiry alert sent to your email!")
+if st.button("Remove Item") and remove_item:
+    df = df[df["Item"] != remove_item]
+    save_data(df)
+    st.success("Item removed")
 
-    else:
-        st.info("No items added yet")
-
-    # ---------------- LOGOUT ----------------
-    if st.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.email = ""
-        st.session_state.items = pd.DataFrame(
-            columns=["Item", "Quantity", "Unit", "Expiry Date"]
-        )
-        st.experimental_rerun()
+# ---------------- DISPLAY ----------------
+st.subheader("📋 Current Inventory")
+st.dataframe(df)
