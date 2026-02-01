@@ -1,191 +1,122 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 import smtplib
 from email.message import EmailMessage
 import os
 
-# ==================================================
-# 🔐 CREATOR EMAIL CONFIG (ONLY CREATOR)
-# ==================================================
-CREATOR_EMAIL = "yourgmail@gmail.com"          # creator email
-CREATOR_APP_PASSWORD = "abcdefghijklmnop"     # 16-char app password
+# ================= CONFIGURATION (CREATOR SIDE) =================
+# In a real app, use st.secrets for these!
+CREATOR_EMAIL = "your-email@gmail.com" 
+CREATOR_APP_PASSWORD = "your-app-password" 
 DATA_FILE = "inventory.csv"
 
-# ==================================================
-# 📧 EMAIL FUNCTION
-# ==================================================
-def send_email(to_email, subject, body):
-    try:
-        msg = EmailMessage()
-        msg["From"] = CREATOR_EMAIL
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.set_content(body)
+# ================= EMAIL FUNCTION =================
+def send_email(receiver, subject, body):
+    msg = EmailMessage()
+    msg.set_content(body)
+    msg["Subject"] = subject
+    msg["From"] = CREATOR_EMAIL
+    msg["To"] = receiver
 
+    try:
         server = smtplib.SMTP("smtp.gmail.com", 587)
         server.starttls()
         server.login(CREATOR_EMAIL, CREATOR_APP_PASSWORD)
         server.send_message(msg)
         server.quit()
+        return True
     except Exception as e:
-        st.error(f"❌ Email failed: {e}")
+        print(f"Error: {e}")
+        return False
 
-# ==================================================
-# 📦 DATA FUNCTIONS
-# ==================================================
+# ================= DATA FUNCTIONS =================
 def load_data():
     if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
-    else:
-        df = pd.DataFrame(columns=[
-            "Username",
-            "UserEmail",
-            "Item",
-            "Quantity",
-            "Unit",
-            "Expiry",
-            "ReminderSent",
-            "ExpiredSent",
-            "AddedSent"
-        ])
-    return df
+        return pd.read_csv(DATA_FILE)
+    return pd.DataFrame(columns=["Item", "Quantity", "Expiry", "LastAlertSent"])
 
 def save_data(df):
     df.to_csv(DATA_FILE, index=False)
 
-# ==================================================
-# 🔑 SESSION INIT
-# ==================================================
+# ================= SESSION INIT =================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 st.set_page_config(page_title="FreshMate", layout="centered")
 st.title("🥗 FreshMate")
 
-# ==================================================
-# 🔐 LOGIN PAGE
-# ==================================================
+# ================= USER LOGIN PAGE =================
 if not st.session_state.logged_in:
-    st.subheader("🔐 Login")
-    username = st.text_input("Username")
-    email = st.text_input("Email Address")
+    st.subheader("👋 Welcome to FreshMate")
+    user_name = st.text_input("👤 Your Name")
+    user_email = st.text_input("📧 Your Email (to receive alerts)")
 
-    if st.button("Login"):
-        if username and email:
+    if st.button("Start Tracking"):
+        if user_name and user_email:
             st.session_state.logged_in = True
-            st.session_state.username = username
-            st.session_state.email = email
-
-            # Login success email
-            send_email(
-                email,
-                "FreshMate Login Successful",
-                f"Hello {username},\n\nYou have successfully logged in to FreshMate."
-            )
-
-            st.success("Login successful! Email sent 📩")
+            st.session_state.user_email = user_email
+            st.session_state.user_name = user_name
             st.rerun()
         else:
-            st.warning("Please fill all fields")
+            st.warning("Please enter your details to continue.")
     st.stop()
 
-# ==================================================
-# 🏠 MAIN APP
-# ==================================================
-st.success(f"Welcome {st.session_state.username}")
+# ================= MAIN APP =================
+st.sidebar.write(f"Logged in as: **{st.session_state.user_name}**")
+if st.sidebar.button("Logout"):
+    st.session_state.logged_in = False
+    st.rerun()
 
 df = load_data()
 
-# ==================================================
-# ➕ ADD ITEM
-# ==================================================
+# ================= ADD ITEM =================
 st.subheader("➕ Add Grocery Item")
-with st.form("add_item"):
-    item = st.text_input("Item Name")
-    quantity = st.number_input("Quantity", min_value=0.1)
-    unit = st.selectbox("Unit", ["kg", "g", "litre", "ml", "packs", "pieces"])
-    expiry = st.date_input("Expiry Date")
-    add = st.form_submit_button("Add Item")
+col1, col2 = st.columns(2)
 
-    if add:
-        if item:
-            new_row = {
-                "Username": st.session_state.username,
-                "UserEmail": st.session_state.email,
-                "Item": item,
-                "Quantity": quantity,
-                "Unit": unit,
-                "Expiry": expiry,
-                "ReminderSent": False,
-                "ExpiredSent": False,
-                "AddedSent": False
-            }
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+with col1:
+    item = st.text_input("Item Name")
+    quantity = st.text_input("Quantity (e.g., 1 kg)")
+with col2:
+    expiry = st.date_input("Expiry Date")
+
+if st.button("Add Item"):
+    if item and quantity:
+        # Add new row with 'None' for LastAlertSent
+        new_row = {"Item": item, "Quantity": quantity, "Expiry": str(expiry), "LastAlertSent": "None"}
+        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        save_data(df)
+        st.success(f"{item} added!")
+    else:
+        st.warning("Please fill all fields")
+
+# ================= EXPIRY ALERT LOGIC (5 Days Before) =================
+today = date.today()
+alert_threshold = today + timedelta(days=5)
+
+for index, row in df.iterrows():
+    exp_date = datetime.strptime(str(row["Expiry"]), "%Y-%m-%d").date()
+    
+    # Check if today is exactly 5 days before expiry AND we haven't sent an alert yet
+    if exp_date == alert_threshold and row["LastAlertSent"] != str(today):
+        subject = f"⚠️ FreshMate: {row['Item']} Expires in 5 Days!"
+        body = f"Hello {st.session_state.user_name},\n\nYour {row['Item']} ({row['Quantity']}) will expire on {row['Expiry']}. Use it soon!"
+        
+        if send_email(st.session_state.user_email, subject, body):
+            df.at[index, "LastAlertSent"] = str(today)
             save_data(df)
 
-            # Send email immediately after adding
-            if not new_row["AddedSent"]:
-                send_email(
-                    st.session_state.email,
-                    "FreshMate – New Item Added",
-                    f"Hello {st.session_state.username},\n\nYou added '{item}' ({quantity} {unit}) expiring on {expiry}."
-                )
-                df.at[len(df)-1, "AddedSent"] = True
-                save_data(df)
-
-            st.success("Item added and notification sent 📩")
-        else:
-            st.warning("Item name required")
-
-# ==================================================
-# 🔔 EXPIRY NOTIFICATIONS (3-day reminder & expired)
-# ==================================================
-today = date.today()
-
-for i, row in df.iterrows():
-    if row["UserEmail"] != st.session_state.email:
-        continue
-
-    expiry_date = pd.to_datetime(row["Expiry"]).date()
-    days_left = (expiry_date - today).days
-
-    # 3-day reminder
-    if days_left == 3 and not row["ReminderSent"]:
-        send_email(
-            row["UserEmail"],
-            "⏰ FreshMate Reminder",
-            f"Hello {row['Username']},\n\nYour item '{row['Item']}' will expire in 3 days ({row['Expiry']})."
-        )
-        df.at[i, "ReminderSent"] = True
-
-    # Expired alert
-    if days_left < 0 and not row["ExpiredSent"]:
-        send_email(
-            row["UserEmail"],
-            "❌ FreshMate Alert – Expired",
-            f"Hello {row['Username']},\n\nYour item '{row['Item']}' has expired on {row['Expiry']}."
-        )
-        df.at[i, "ExpiredSent"] = True
-
-save_data(df)
-
-# ==================================================
-# 📋 DISPLAY INVENTORY
-# ==================================================
-st.subheader("📋 Your Inventory")
-user_df = df[df["UserEmail"] == st.session_state.email]
-st.dataframe(user_df[["Item", "Quantity", "Unit", "Expiry"]], use_container_width=True)
-
-# ==================================================
-# 🗑 REMOVE ITEM
-# ==================================================
-st.subheader("🗑 Remove Used Item")
-if not user_df.empty:
-    remove_item = st.selectbox("Select item", user_df["Item"].tolist())
-    if st.button("Remove"):
-        df = df[~((df["Item"] == remove_item) &
-                  (df["UserEmail"] == st.session_state.email))]
+# ================= REMOVE ITEM =================
+st.subheader("🗑 Manage Inventory")
+if not df.empty:
+    remove_item = st.selectbox("Select item to remove", df["Item"].tolist())
+    if st.button("Remove Selected"):
+        df = df[df["Item"] != remove_item]
         save_data(df)
-        st.success("Item removed")
         st.rerun()
+else:
+    st.info("Your pantry is empty.")
+
+# ================= DISPLAY ITEMS =================
+st.subheader("📋 Current Inventory")
+st.table(df[["Item", "Quantity", "Expiry"]])
