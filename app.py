@@ -86,7 +86,7 @@ if not st.session_state.logged_in:
                 st.rerun()
                 
             except:
-                st.error("❌ Invalid Gmail App Password"
+                st.error("❌ Invalid Gmail App Password")
     st.stop()
 
 # ==================================================
