@@ -85,8 +85,8 @@ if not st.session_state.logged_in:
                 st.success("Login successful 📩")
                 st.rerun()
 
-            except:
-    st.stop()
+            except:()
+               st.stop()
 
 # ==================================================
 # 🏠 MAIN APP
